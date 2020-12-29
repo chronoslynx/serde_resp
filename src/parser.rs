@@ -1,3 +1,4 @@
+//! A nom-based parser for the [REdis Serialization Protocol](https://redis.io/topics/protocol).
 use nom::{
     branch::alt,
     bytes::streaming::{tag, take_until},
@@ -13,20 +14,25 @@ use std::result::Result as StdResult;
 use std::str;
 use thiserror::Error;
 
+/// Possible parsing error conditions
 #[derive(Debug, Error)]
 pub enum Error<I: fmt::Debug> {
-    #[error("invalid {value_type}: {reason}")]
-    InvalidValue { value_type: String, reason: String },
+    /// A bulk string of larger than 512MB was encountered.
+    #[error("invalid bulk: {0}")]
+    BulkTooLarge(String),
+    /// An invalid string was encountered when parsing a [`Type::Integer`]
     #[error(transparent)]
     InvalidInteger {
         #[from]
         source: num::ParseIntError,
     },
+    /// An invalid string was encountered when parsing a [`Type::Error`]
     #[error(transparent)]
     InvalidStr {
         #[from]
         source: str::Utf8Error,
     },
+    /// A generic error from nom, our parsing library.
     #[error("error {kind:?} at {input:?}")]
     Nom { kind: ErrorKind, input: I },
 }
@@ -112,13 +118,10 @@ fn bulk(input: &[u8]) -> Result<&[u8], Type> {
     if len == NULL_SENTINEL {
         Ok((remaining, Type::Null))
     } else if len > BULK_STRING_MAX {
-        Err(Err::Error(Error::InvalidValue {
-            value_type: "bulk".to_string(),
-            reason: format!(
-                "length of {} is greater than the max of {}",
-                len, BULK_STRING_MAX
-            ),
-        }))
+        Err(Err::Error(Error::BulkTooLarge(format!(
+            "length of {} is greater than the max of {}",
+            len, BULK_STRING_MAX
+        ))))
     } else {
         let (remaining, data) = until_crlf(remaining)?;
         Ok((
@@ -147,7 +150,7 @@ fn array(input: &[u8]) -> Result<&[u8], Type> {
     }
 }
 
-/// Attempt to parse an RESP [Type][serde_resp::parser::Type] from the provided buffer.
+/// Attempt to parse an RESP [`Type`][Type] from the provided buffer.
 ///
 /// ```rust
 /// # use std::error::Error;
@@ -181,7 +184,6 @@ fn array(input: &[u8]) -> Result<&[u8], Type> {
 /// let result = parser::parse(b"\r\n");
 /// assert!(result.is_err());
 /// ```
-///
 pub fn parse(input: &[u8]) -> Result<&[u8], Type> {
     alt((simple_str, error, integer, bulk, array))(input)
 }
