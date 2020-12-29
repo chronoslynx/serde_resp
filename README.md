@@ -7,6 +7,6 @@
 - [X] Parse errors
 - [X] Parse integers
 - [X] Parse bulk strings
-- [ ] Parse Arrays
+- [X] Parse Arrays
 - [ ] Implement serializer
 - [ ] Implement deserializer

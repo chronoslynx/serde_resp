@@ -52,16 +52,16 @@ type Result<I, O> = IResult<I, O, Error<I>>;
 // The maximum size of a bulk string is 512MB.
 const BULK_STRING_MAX: i64 = 4_096_000_000;
 // A bulk string length of -1 indicates a nil value.
-const BULK_STRING_NIL: i64 = -1;
+const NULL_SENTINEL: i64 = -1;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Type<'a> {
     SimpleStr(&'a [u8]),
     Error(&'a str),
     Integer(i64),
     Bulk { len: u32, data: &'a [u8] },
     Array(Vec<Type<'a>>),
-    Nil,
+    Null,
 }
 
 fn to_str(input: &[u8]) -> StdResult<&str, Error<&u8>> {
@@ -103,10 +103,10 @@ fn integer(input: &[u8]) -> Result<&[u8], Type> {
 
 fn bulk(input: &[u8]) -> Result<&[u8], Type> {
     let (remaining, len) = map_res(map_res(prefixed_line(b"$"), to_str), to_i64)(input)?;
-    if len == BULK_STRING_NIL {
+    if len == NULL_SENTINEL {
         // eat the next crlf
         let (remaining, _) = crlf(remaining)?;
-        Ok((remaining, Type::Nil))
+        Ok((remaining, Type::Null))
     } else if len > BULK_STRING_MAX {
         Err(Err::Error(Error::InvalidValue {
             value_type: "bulk".to_string(),
@@ -127,8 +127,24 @@ fn bulk(input: &[u8]) -> Result<&[u8], Type> {
     }
 }
 
+fn array(input: &[u8]) -> Result<&[u8], Type> {
+    let (mut remaining, len) = map_res(map_res(prefixed_line(b"*"), to_str), to_i64)(input)?;
+    if len == NULL_SENTINEL {
+        Ok((remaining, Type::Null))
+    } else {
+        let mut data = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            println!("reading element {}", i);
+            let (now_remaining, elem) = parse(remaining)?;
+            remaining = now_remaining;
+            data.push(elem);
+        }
+        Ok((remaining, Type::Array(data)))
+    }
+}
+
 pub fn parse(input: &[u8]) -> Result<&[u8], Type> {
-    alt((simple_str, error, integer, bulk))(input)
+    alt((simple_str, error, integer, bulk, array))(input)
 }
 
 #[cfg(test)]
@@ -193,11 +209,48 @@ mod tests {
     }
 
     #[test]
-    fn parse_bulk_nil() -> TestResult {
+    fn parse_bulk_null() -> TestResult {
         let (_, parsed) = bulk(b"$-1\r\n\r\n").map_err(|e| e.to_string())?;
         match parsed {
-            Type::Nil => Ok(()),
-            _ => Err(format!("expected Nil, not {:?}", parsed)),
+            Type::Null => Ok(()),
+            _ => Err(format!("expected Null, not {:?}", parsed)),
+        }
+    }
+
+    #[test]
+    fn parse_array_ok() -> TestResult {
+        let (_, parsed) = array(b"*2\r\n+OK\r\n:12\r\n").map_err(|e| e.to_string())?;
+        let expected: Vec<Type> = vec![Type::SimpleStr(b"OK"), Type::Integer(12)];
+        match parsed {
+            Type::Array(data) => {
+                let len = data.len();
+                if data.len() != expected.len() {
+                    return Err(format!("expected {:?}, got {:?}", expected, data));
+                }
+                let matching = data
+                    .clone()
+                    .into_iter()
+                    .zip(expected.clone())
+                    .filter(|(a, b)| a == b)
+                    .count();
+                if matching != len {
+                    return Err(format!("expected {:?}, got {:?}", expected, data));
+                }
+                Ok(())
+            }
+            _ => Err(format!(
+                "expected Array(String(OK),Integer(12)), not {:?}",
+                parsed
+            )),
+        }
+    }
+
+    #[test]
+    fn parse_array_null() -> TestResult {
+        let (_, parsed) = array(b"*-1\r\n").map_err(|e| e.to_string())?;
+        match parsed {
+            Type::Null => Ok(()),
+            _ => Err(format!("expected Null, not {:?}", parsed)),
         }
     }
 
@@ -232,8 +285,8 @@ mod tests {
     #[test]
     fn parse_parses_bulk() -> TestResult {
         match parse(b"$-1\r\n\r\n").map_err(|e| e.to_string())? {
-            (_, Type::Nil) => Ok(()),
-            (_, parsed) => Err(format!("expected Nil, not {:?}", parsed,)),
+            (_, Type::Null) => Ok(()),
+            (_, parsed) => Err(format!("expected Null, not {:?}", parsed,)),
         }
     }
 }
