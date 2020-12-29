@@ -54,12 +54,17 @@ const BULK_STRING_MAX: i64 = 4_096_000_000;
 // A bulk string length of -1 indicates a nil value.
 const NULL_SENTINEL: i64 = -1;
 
+/// RESP data types.
 #[derive(Debug, PartialEq, Clone)]
 pub enum Type<'a> {
-    SimpleStr(&'a [u8]),
+    Simple(&'a [u8]),
     Error(&'a str),
     Integer(i64),
-    Bulk { len: u32, data: &'a [u8] },
+    /// Bulk strings can hold up to 512MB of binary data.
+    Bulk {
+        len: u32,
+        data: &'a [u8],
+    },
     Array(Vec<Type<'a>>),
     Null,
 }
@@ -72,6 +77,7 @@ fn to_i64(input: &str) -> StdResult<i64, Error<&str>> {
     Ok(input.parse::<i64>()?)
 }
 
+/// Parse
 fn until_crlf(input: &[u8]) -> Result<&[u8], &[u8]> {
     let (remaining, (line, _)) = tuple((take_until("\r\n"), crlf))(input)?;
     Ok((remaining, line))
@@ -85,7 +91,7 @@ fn prefixed_line<'a>(prefix: &'a [u8]) -> impl Fn(&[u8]) -> Result<&[u8], &[u8]>
 }
 
 fn simple_str<'a>(input: &'a [u8]) -> Result<&[u8], Type<'a>> {
-    map(prefixed_line(b"+"), |u: &[u8]| Type::SimpleStr(u))(input)
+    map(prefixed_line(b"+"), |u: &[u8]| Type::Simple(u))(input)
 }
 
 fn error(input: &[u8]) -> Result<&[u8], Type> {
@@ -141,6 +147,41 @@ fn array(input: &[u8]) -> Result<&[u8], Type> {
     }
 }
 
+/// Attempt to parse an RESP [Type][serde_resp::parser::Type] from the provided buffer.
+///
+/// ```rust
+/// # use std::error::Error;
+/// # use serde_resp::parser;
+/// #
+/// # fn main() -> Result<(), Box<dyn Error>> {
+/// let (_, data) = parser::parse(b"+OK\r\n")?;
+/// assert_eq!(data, parser::Type::Simple(b"OK"));
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// If this function requires more data than is available in the input buffer, it will
+/// return an error containing [`nom::Err::Incomplete`] which contains the amount
+/// necessary to complete parsing. When this occurrs, that data is needed at the end of
+/// the provided input buffer, not instead of it:
+///
+/// ```rust
+/// # use std::error::Error;
+/// # use serde_resp::parser;
+/// # use nom;
+/// let result = parser::parse(b"+OK");
+/// assert!(result.is_err());
+/// assert!(result.err().unwrap().is_incomplete());
+///
+/// // This won't fix it as the parser is stateless
+/// // It will fail will a different error now, as this is fundamentally
+/// // not a valid RESP message
+/// let result = parser::parse(b"\r\n");
+/// assert!(result.is_err());
+/// ```
+///
 pub fn parse(input: &[u8]) -> Result<&[u8], Type> {
     alt((simple_str, error, integer, bulk, array))(input)
 }
@@ -154,7 +195,7 @@ mod tests {
     fn parse_simple_str_ok() -> TestResult {
         let (_, parsed) = simple_str(b"+OK\r\n").map_err(|e| e.to_string())?;
         match parsed {
-            Type::SimpleStr(b"OK") => Ok(()),
+            Type::Simple(b"OK") => Ok(()),
             _ => Err(format!("expected SimpleStr('OK'), not {:?}", parsed)),
         }
     }
@@ -218,7 +259,7 @@ mod tests {
     #[test]
     fn parse_array_ok() -> TestResult {
         let (_, parsed) = array(b"*2\r\n+OK\r\n:12\r\n").map_err(|e| e.to_string())?;
-        let expected: Vec<Type> = vec![Type::SimpleStr(b"OK"), Type::Integer(12)];
+        let expected: Vec<Type> = vec![Type::Simple(b"OK"), Type::Integer(12)];
         match parsed {
             Type::Array(data) => {
                 let len = data.len();
@@ -256,7 +297,7 @@ mod tests {
     #[test]
     fn parse_parses_simple_strs() -> TestResult {
         match parse(b"+Simplest of strings\r\n").map_err(|e| e.to_string())? {
-            (_, Type::SimpleStr(b"Simplest of strings")) => Ok(()),
+            (_, Type::Simple(b"Simplest of strings")) => Ok(()),
             (_, parsed) => Err(format!(
                 "expected SimpleStr('Simplest of strings'), not {:?}",
                 parsed,
@@ -285,6 +326,15 @@ mod tests {
         match parse(b"$-1\r\n").map_err(|e| e.to_string())? {
             (_, Type::Null) => Ok(()),
             (_, parsed) => Err(format!("expected Null, not {:?}", parsed,)),
+        }
+    }
+
+    #[test]
+    fn parse_incomplete() -> TestResult {
+        let result = parse(b"+OK");
+        match result {
+            Err(nom::Err::Incomplete(_)) => Ok(()),
+            _ => Err(format!("unexpected {:?}", result)),
         }
     }
 }
