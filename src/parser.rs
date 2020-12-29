@@ -104,8 +104,6 @@ fn integer(input: &[u8]) -> Result<&[u8], Type> {
 fn bulk(input: &[u8]) -> Result<&[u8], Type> {
     let (remaining, len) = map_res(map_res(prefixed_line(b"$"), to_str), to_i64)(input)?;
     if len == NULL_SENTINEL {
-        // eat the next crlf
-        let (remaining, _) = crlf(remaining)?;
         Ok((remaining, Type::Null))
     } else if len > BULK_STRING_MAX {
         Err(Err::Error(Error::InvalidValue {
@@ -210,7 +208,7 @@ mod tests {
 
     #[test]
     fn parse_bulk_null() -> TestResult {
-        let (_, parsed) = bulk(b"$-1\r\n\r\n").map_err(|e| e.to_string())?;
+        let (_, parsed) = bulk(b"$-1\r\n").map_err(|e| e.to_string())?;
         match parsed {
             Type::Null => Ok(()),
             _ => Err(format!("expected Null, not {:?}", parsed)),
@@ -284,7 +282,7 @@ mod tests {
 
     #[test]
     fn parse_parses_bulk() -> TestResult {
-        match parse(b"$-1\r\n\r\n").map_err(|e| e.to_string())? {
+        match parse(b"$-1\r\n").map_err(|e| e.to_string())? {
             (_, Type::Null) => Ok(()),
             (_, parsed) => Err(format!("expected Null, not {:?}", parsed,)),
         }
