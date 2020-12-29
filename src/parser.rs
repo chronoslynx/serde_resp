@@ -127,7 +127,6 @@ fn bulk(input: &[u8]) -> Result<&[u8], Type> {
     }
 }
 
-// TODO errors?
 pub fn parse(input: &[u8]) -> Result<&[u8], Type> {
     alt((simple_str, error, integer, bulk))(input)
 }
