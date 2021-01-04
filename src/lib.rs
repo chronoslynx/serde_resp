@@ -1,6 +1,5 @@
 mod de;
 mod error;
-mod parser;
 mod ser;
 
 pub use de::{from_str, Deserializer};

@@ -10,3 +10,4 @@ edition = "2018"
 [dependencies]
 nom = "6"
 thiserror = "1"
+serde = "1.0.118"
